@@ -46,6 +46,14 @@ public class FileConfigStore implements ConfigStore {
     private static final String cluster_prop = CommGlobals.IMQ + ".cluster.url";
 
     /**
+     * Only file-system URLs are accepted for {@code imq.cluster.url}. Allowing
+     * arbitrary schemes (http, https, ftp, jar, ...) at this sink would let an
+     * attacker who can set the property turn the broker into an SSRF gadget on
+     * every restart. See CVE-2026-24457.
+     */
+    static final String ALLOWED_CLUSTER_URL_SCHEME = "file";
+
+    /**
      * path to the actual location of the instance property file
      */
     private String storedprop_loc = null;
@@ -147,6 +155,13 @@ public class FileConfigStore implements ConfigStore {
 
         try {
             URL curl = new URL(cluster_url_str);
+            if (!isAllowedClusterUrl(curl)) {
+                logger.log(Logger.WARNING,
+                        "Refusing to load " + cluster_prop + "='" + cluster_url_str
+                                + "': scheme '" + curl.getProtocol() + "' is not permitted; only '"
+                                + ALLOWED_CLUSTER_URL_SCHEME + "' is allowed (CVE-2026-24457)");
+                return storedprops;
+            }
             InputStream cu_is = curl.openStream();
             BufferedInputStream bfile = new BufferedInputStream(cu_is);
             storedprops.load(bfile);
@@ -156,6 +171,20 @@ public class FileConfigStore implements ConfigStore {
             logger.log(Logger.WARNING, BrokerResources.W_BAD_PROPERTY_FILE, "cluster", cluster_url_str, ex);
         }
         return storedprops;
+    }
+
+    /**
+     * @return {@code true} only when the URL uses the {@code file} scheme.
+     *     Anything else (http, https, ftp, jar, gopher, ...) would let an
+     *     attacker exfiltrate data or probe internal endpoints when the
+     *     broker loads cluster properties on startup.
+     */
+    static boolean isAllowedClusterUrl(URL url) {
+        if (url == null) {
+            return false;
+        }
+        String scheme = url.getProtocol();
+        return scheme != null && ALLOWED_CLUSTER_URL_SCHEME.equalsIgnoreCase(scheme);
     }
 
     /**
